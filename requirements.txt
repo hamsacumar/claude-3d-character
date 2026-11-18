@@ -1,0 +1,4 @@
+# Stage 1 (reconstruct.py) - runs on CPU, no GPU needed
+mediapipe>=0.10.14
+opencv-python>=4.8
+numpy>=1.24

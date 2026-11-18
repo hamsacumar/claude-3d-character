@@ -1,5 +1,8 @@
 # Implementation Roadmap
 
+> **Status:** deferred. The current focus is the working visual experiment (see README and
+> docs/TOOL_COMPARISON.md). This design applies once the experiment proves the approach.
+
 Each phase ends with something that can be demonstrated, and with a measured identity score.
 
 ## Phase 0: Foundations (no heavy dependencies)

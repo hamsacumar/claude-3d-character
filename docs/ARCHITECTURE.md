@@ -1,5 +1,8 @@
 # Architecture
 
+> **Status:** deferred. The current focus is the working visual experiment (see README and
+> docs/TOOL_COMPARISON.md). This design applies once the experiment proves the approach.
+
 ## Principles
 1. **Stages with typed contracts.** Each pipeline step is a `Stage` that reads and
    writes typed artifacts. Any stage can be swapped, cached or re-run on its own.
