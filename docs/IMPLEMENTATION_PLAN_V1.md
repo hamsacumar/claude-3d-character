@@ -171,12 +171,12 @@ CUDA toolkit and no driver changes. Blender isn't modified; it's only launched h
 |---|---|---|---|
 | 1 | uv standalone binary | ~35 MB | MIT / Apache-2.0 |
 | 2 | CPython 3.12 (via uv, project-local) | ~30 MB | PSF-2.0 |
-| 3 | torch 2.15.0 **CPU-only** (from the PyTorch CPU wheel index) | ~200 MB | permissive (Apache-2.0, BSD, MIT and others) |
-| 4 | numpy, scipy, opencv-python, mediapipe | ~150 MB | BSD / BSD / Apache-2.0 / Apache-2.0 |
+| 3 | torch 2.15.0 **CPU-only** (`2.15.0+cpu` wheel, hash-pinned, from the PyTorch CPU wheel index) | 210 MB | permissive (Apache-2.0, BSD, MIT and others) |
+| 4 | numpy, scipy, mediapipe, opencv-contrib-python + 25 pinned dependencies (`constraints-p0.txt`) | 211 MB | see `docs/licenses/LICENCE_MANIFEST.md` §C |
 | 5 | Face Landmarker bundle | 3.7 MB | Apache-2.0 |
 | 6 | Multiclass Selfie Segmenter | ~16 MB | Apache-2.0 |
 | 7 | `FLAME2023Open.zip` (you download it) | unknown until signed in | Open Model License; contents verified per §2 |
-| | **Total** | **≈ 0.45 GB + FLAME zip** | |
+| | **Total** | **≈ 0.49 GB + FLAME zip** | |
 
 Python 3.12 is used because PyTorch 2.15 needs ≥ 3.11 and current NumPy needs ≥ 3.12. All wheels are
 `manylinux_2_28`; Ubuntu 22.04 provides glibc 2.35.
