@@ -1,121 +1,196 @@
-# Implementation Plan v1: Photo → FLAME 2023 Open head → Blender → 4K texture
+# Implementation Plan v1 (revision 2): Photo → FLAME 2023 Open head → Blender → print-colour texture
 
-Status: **waiting for approval**. Nothing has been installed or downloaded.
+Status: **waiting for approval**. Nothing has been installed or downloaded for this plan.
 
-## Scope of v1
-One photo → fitted **FLAME 2023 Open** head (skull, ears, eyeballs, neck) → Blender 4.5 project →
-improved 4096² colour texture → **separate** `.blend` + PNG. Body and teeth are out of scope.
-Hair is a simple first version only.
+## 0. Decisions applied in this revision
+1. **The expression and gaze in the photo are preserved.** No automatic neutralization and no jaw closing.
+   This matches `blender-print-texture` §2 ("Preserve … expression, gaze direction").
+2. **Hair must be printable:** a scalp colour texture plus a separate **hair shell mesh**. No hair curves in
+   deliverables.
+3. **SDXL and any texture enhancement are deferred.** They are not part of the proof of concept or v1a.
+4. **A FLAME reconstruction proof of concept (PoC) comes first.** It has measurable acceptance criteria (§3).
+5. The texture stage now **follows the restored skill exactly**: registered orthographic painting views,
+   one 4096 × 4096 colour image per figure, emission bake, no reliance on extra maps (§5).
+6. Licences are verified from primary sources before any download request (§7 and
+   `docs/licenses/FLAME_licence_record_2026-11-19.md`).
 
-## 1. Pipeline and who implements each part
+## 1. Phases
 
-| Step | What | Implementation | Runs on |
+| Phase | Content | Downloads | Needs approval |
 |---|---|---|---|
-| 1 Analyze | 478 face landmarks, head pose, hair/face-skin/body/clothes segmentation | MediaPipe Face Landmarker + Multiclass Selfie Segmenter (existing libraries) | CPU |
-| 2 FLAME layer | Shape/expression blendshapes, pose correctives, linear blend skinning (5 joints) | **We write this ourselves** (~200 lines of PyTorch), plus a loader that reads the FLAME `.pkl` **without `chumpy`**, an unmaintained library that breaks on NumPy ≥1.24 | CPU/GPU |
-| 3 Landmark correspondence | MediaPipe 468 points → points on the FLAME surface | **We build this ourselves**: a one-time registration of the MediaPipe canonical mesh to the FLAME template (anchor pairs + non-rigid ICP), stored as an asset. We don't use MICA's MediaPipe embedding, which is non-commercial | CPU, once |
-| 4 Fitting | Optimize shape β, expression ψ, jaw/neck/eye pose, camera, SH lighting | **We build this ourselves** in plain PyTorch. Losses: landmarks (inner face points), silhouette (distance transform of the face+hair mask sampled at the projected contour), photometric (photo sampled at visible projected vertices vs albedo × SH shading), plus regularizers (β/ψ priors, Laplacian smoothness). **No PyTorch3D or nvdiffrast needed** | CPU (~1–3 min) or GPU (<1 GB) |
-| 5 Neutralize | Set ψ = 0 and jaw closed → neutral, rig-ready head | Our code | CPU |
-| 6 Blender build | Import mesh + UVs, subdivision, skin/eye materials, camera matched to the photo, lights, four-view cameras | `bpy` script, Blender 4.5.14 headless | CPU/GPU |
-| 7 Hair v1 | Hair cap texture + Geometry-Nodes hair curves on the scalp. Length, volume and colour come from the photo's hair mask | `bpy` + our code | CPU |
-| 8 Texture: registered projection | For each texel of the 4096² UV atlas: 3D point → project into the photo → depth test (our numpy/PyTorch z-buffer) → weight by visibility and viewing angle | Our code | CPU/GPU |
-| 9 Texture: de-light + fill | Divide by the fitted SH shading; mirror fill via FLAME's left/right vertex symmetry; skin-tone fill for areas never seen | Our code | CPU |
-| 10 Texture: AI enhancement | (a) Real-ESRGAN ×4 upscale of the face crop. (b) SDXL inpainting at **low strength** on the registered face for skin detail. (c) Render side/back/top views in Blender, inpaint only the unseen masked regions, project back from the known cameras | diffusers + SDXL-inpainting-0.1 + fp16-fix VAE; spandrel to load Real-ESRGAN | GPU (offload) |
-| 11 Bake + package | Merge into a 4096² colour atlas (+ roughness), save PNG, copy the project to `*_print_texture.blend`, pack the image. **The original `.blend` and PNG are never written** | `bpy` (Cycles bake / image save) | GPU/CPU |
-| 12 Verify | Front, 3/4, side and back renders + a contact sheet with the photo; landmark reprojection error | `bpy` + our code | GPU/CPU |
+| **P0: FLAME proof of concept** | Fit FLAME 2023 Open to one photo; Blender 4.5.14 scene; front, 3/4 and side renders; front comparison; landmark error report; correspondence validation | ~0.5 GB + FLAME zip | **Yes, this request** |
+| v1a: Character geometry | Mouth interior/teeth decision, hair shell, eyes, printable assembly, base texture from registered photo projection | small (see §6) | After P0 review |
+| v1b: `blender-print-texture` | The skill's §1–§14 on a copy of the v1a figure, with an approved local image-editing model | ~7.3 GB (SDXL), decided later | After v1a review |
 
-The texture stage (steps 8–11) is where `blender-print-texture` applies. Its **original
-instructions are still needed** (see `.claude/skills/blender-print-texture/SKILL.md`). Steps 8–11
-will be adjusted to follow them exactly once they are pasted in.
+## 2. How P0 works
 
-## 2. Expected output quality (realistic)
-- **Front view:** strong likeness. The visible face texture is the person's own photo, on a fitted head.
-- **Three-quarter view:** good. **Profile:** plausible, but nose projection, chin depth and skull length come from
-  landmarks + the FLAME prior. Expect noticeable differences from the real profile.
-- **Back view:** a coherent generic skull with hair-coloured scalp/curves; not the person's real back of head.
-- **Geometry:** FLAME resolution (5,023 vertices, ~80k after subdivision). Clean, symmetric topology with ears and
-  eyeballs; no wrinkles or pores in the geometry (detail comes from the texture/bump only).
-- **Hair:** v1 hair is a simple stand-in (scalp texture + curves). Short or simple hairstyles look acceptable;
-  long, curly or styled hair will not match. Beards are texture only.
-- **Texture:** 4096² atlas. True detail is limited by the photo: a 600-px-tall face supplies ~600 px of
-  real information, and the rest is upscaling or AI detail. The AI steps add plausible skin texture but
-  **can drift identity**, so they run at low strength and only fill masked, unseen areas on the sides and back.
-- **Not included in v1:** teeth/mouth interior, eyelashes as geometry, body, clothing, re-lighting
-  quality comparable to a scan.
+All of this is **built by us**. No existing FLAME fitting code is used. Every part is tested as described in §4,
+not assumed to work.
 
-## 3. Estimated downloads (all need your approval; sizes approximate)
-
-| Item | Size | Needed for |
+| Step | What | Implementation |
 |---|---|---|
-| FLAME 2023 Open (you register and download it yourself) | ~50–150 MB (check on the download page) | Geometry |
-| `uv` + Python 3.11 venv (Ubuntu 22.04's Python 3.10 reached end of life in Oct 2026; recent PyTorch may not ship wheels for it) | ~40 MB | Everything |
-| PyTorch (CUDA wheel incl. NVIDIA libraries) | ~2.5–3.5 GB (CPU-only build: ~200 MB, enough for the fitting alone) | Fitting, SDXL, ESRGAN |
-| diffusers, transformers, accelerate, safetensors, opencv, scipy, mediapipe | ~0.3 GB | — |
-| SDXL inpainting 0.1 (fp16 weights only) | ~6.9 GB | AI texture |
-| sdxl-vae-fp16-fix | ~0.3 GB | AI texture (prevents fp16 NaNs) |
-| Real-ESRGAN x4plus weights | 64 MB | Upscale |
-| MediaPipe Multiclass Selfie Segmenter | ~16 MB | Hair/skin masks |
-| **Total** | **~10–11 GB disk** | |
+| P0.1 | Inspect `FLAME2023Open.zip`: file list, model keys, vertex/face counts, number of shape and expression components, whether UVs are present | `unzip -l` + a loader that reads the `.pkl` **without `chumpy`**: a restricted unpickler that maps chumpy arrays to NumPy |
+| P0.2 | FLAME layer: template + shape/expression blendshapes + pose correctives + linear blend skinning (global, neck, jaw, 2 eyes) | Our PyTorch code, written from the FLAME paper (SIGGRAPH Asia 2017, §3). **Tested** against FLAME's own template, plus analytic checks (§4 T1) |
+| P0.3 | MediaPipe → FLAME correspondence (468 points → triangle + barycentric coordinates on the FLAME surface) | Our one-time registration: hand-picked anatomical anchors → similarity alignment → non-rigid ICP on the face region → closest-surface projection. **Validated as in §4 T2–T5** |
+| P0.4 | Photo analysis | MediaPipe Face Landmarker (478 points, blendshape scores) + Multiclass Selfie Segmenter (hair, face skin, body skin, clothes) |
+| P0.5 | Fitting | Plain PyTorch, Adam then L-BFGS, staged: (1) camera + head rotation from stable landmarks; (2) + shape β, expression ψ, jaw and eye pose; (3) + outline term (jaw/cheek contour against the face mask's distance transform) and shading term (photo vs albedo × spherical-harmonic lighting at visible vertices). Regularizers: β and ψ priors, pose limits, eyelid–eyeball non-penetration. **The expression is kept.** CPU only |
+| P0.6 | Blender 4.5.14 scene | Headless `bpy` script: FLAME mesh (topology unchanged), eyeballs, a camera that reproduces the photo's view, neutral lighting, cameras for front, 3/4 and side (plus back, informational only) |
+| P0.7 | Renders and comparison | Clay renders (geometry only) and **evaluation-only** photo-projected renders. The projection is used only to judge likeness and is **not** the texture deliverable. Front render overlaid on the photo, with side-by-side views |
+| P0.8 | Report | `poc_report.md` + JSON: landmark errors per region, outline error, parameter ranges, penetration checks, timings, and a description of where the reconstruction is inaccurate |
 
-Option to stage approvals: **v1a** = steps 1–9 + 11–12 (no SDXL: ~3.5 GB, or ~0.6 GB with CPU-only torch),
-then **v1b** adds SDXL.
+P0 runs on **CPU** (PyTorch CPU build); no CUDA install is needed. Blender renders with Cycles or EEVEE on your
+GPU. Hair, teeth and texture enhancement are **not** part of P0.
 
-## 4. GPU memory (RTX 3050 Laptop, 4 GB)
+## 3. P0 acceptance criteria
 
-| Step | VRAM | Time (estimate) |
+The errors are 2D distances in the photo, expressed as a percentage of **inter-ocular distance (IOD)**: the
+distance between the outer eye corners.
+
+The criteria are set relative to MediaPipe's own accuracy. Its model card reports ~2.76 % IOD mean
+absolute error, so a fit cannot honestly be expected to beat that.
+
+| # | Criterion | Threshold |
 |---|---|---|
-| Fitting | <1 GB (or CPU) | 1–3 min |
-| Real-ESRGAN, tiled | <1 GB | <1 min |
-| SDXL inpainting fp16, **sequential CPU offload**, 1024² | ~2–3 GB peak | **~2–6 min per image**; ~6–8 images per character → **~20–45 min** |
-| Blender Cycles 4096² bake / renders | ~1–2 GB | a few minutes |
+| A1 | Runs end to end on your Ubuntu machine with Blender 4.5.14, with no downloads beyond the approved list | Pass/fail |
+| A2 | Output mesh is unchanged FLAME 2023 Open topology (vertex and face counts equal the template's); the expression/jaw/eye pose from the photo is preserved, not neutralized | Pass/fail |
+| A3 | Mean landmark error, all fitted landmarks | **≤ 4.0 % IOD** |
+| A4 | Mean error per region: eyes, brows, nose, lips, outline | each **≤ 6.0 % IOD**, all reported |
+| A5 | Eye corners, mouth corners, nose base (key anatomical points) | each **≤ 3.5 % IOD** |
+| A6 | Jaw/cheek outline: mean distance from the projected FLAME contour to the face-mask boundary | **≤ 4.0 % IOD** |
+| A7 | Plausibility: all shape coefficients within ±3 SD; no eyelid/eyeball or upper/lower-lip interpenetration beyond 0.5 mm | Pass/fail, reported |
+| A8 | Front visual comparison: the overlay and side-by-side show no visibly misplaced eyes, nose, mouth or face outline | **Your sign-off** |
+| A9 | 3/4 and side clay renders are produced and the limitations section names the specific inaccuracies (see below) | Pass/fail |
+| A10 | Correspondence validation T1–T4 pass (§4); T5 is reported if extra photos exist | Pass/fail |
+| A11 | Reproducible: two runs with the same seed give identical parameters | Pass/fail |
+| A12 | Only verified-licence components were used; the FLAME zip contents were checked against the licence record before use | Pass/fail |
 
-SDXL with offload also needs **≥16 GB system RAM**. This is still to be confirmed with `scripts/check_env.sh`.
+**Optional profile check (recommended):** if you also supply a **side photo of the same person**, it is not used for
+fitting. It is used only to measure profile error: nose-tip, chin and forehead offsets as a % of face height. A
+single frontal photo cannot measure the profile, so without it the profile accuracy is **unknown**, not "good".
 
-## 5. PyTorch3D compatibility (item 4)
-**v1 does not use PyTorch3D.** The fitter only needs to project vertices and sample images, which plain
-PyTorch can do. That avoids building PyTorch3D from source against a matching CUDA toolkit and compiler.
-PyTorch3D's latest builds (0.7.9) are published on conda-forge, not as pip wheels for current PyTorch. If
-a later version needs a full differentiable rasterizer, compatibility will be checked against the exact
-output of `scripts/check_env.sh` (driver, CUDA, gcc, Python) before anything is installed.
+**Where P0 is expected to be inaccurate (to be confirmed by the report):**
+- **Profile:** nose projection, chin and forehead depth, and skull length come mostly from FLAME's statistical prior.
+- **Ears:** close to FLAME's average shape.
+- **Eyelids:** fine eyelid shape is limited by FLAME's resolution.
+- **Mouth:** an open mouth shows **no teeth** (FLAME has none). This is a v1a decision.
+- **Hair:** the head is bald.
 
-PyTorch itself: the RTX 3050 (Ampere, compute capability 8.6) is supported by all current CUDA 12.x/13.x
-wheels. The wheel's CUDA version must be ≤ the version your **driver** supports (`nvidia-smi` shows it).
-CUDA 13 wheels need a 580-series or newer driver. We'll pick the wheel from your report.
-**Unverified until you run `scripts/check_env.sh`.**
+## 4. Validating the custom FLAME layer and the MediaPipe → FLAME correspondence
 
-## 6. Licence register (each item individually)
+Nothing is assumed correct. Each test produces numbers or images that go into the PoC report.
 
-| Component | Licence | Commercial use | Notes |
+| Test | What it proves | Pass condition |
+|---|---|---|
+| **T1 FLAME layer correctness** | Our PyTorch FLAME reproduces the model: zero parameters give the template exactly; single shape/expression components match `template + basis × value` directly from the `.pkl`; jaw and eye rotations move only the expected vertices (checked against skinning weights); left/right symmetry of the mean head | Max vertex deviation **< 1e-5 m** for the linear checks. Joint checks are exact up to float tolerance |
+| **T2 Registration residuals** | The MediaPipe canonical mesh was actually deformed onto the FLAME template | After non-rigid ICP: median point-to-surface distance **< 1.0 mm**, max **< 3.0 mm** in the face region. Anchor residuals reported individually |
+| **T3 Semantic overlay** | Points land on the right **features**, not just near the surface: eyelid points on the lid margin (not the eyeball), lip points on the vermilion border and inner lip line, brow points on the brow ridge, nose points on the alae and tip | Front and side Blender renders of the FLAME template with MediaPipe contours drawn on it. **Reviewed visually by me and by you**; failures fixed by adjusting anchors or region weights |
+| **T4 Synthetic recovery** | The fitter and correspondence together can recover a known head: sample random FLAME heads (β, ψ, jaw, eye pose, camera), generate their landmarks through the correspondence, add noise at MediaPipe's level, fit, compare | 2D reprojection **< 1 % IOD** without noise. 3D vertex error reported **per region and per axis**: this measures how much depth a single view really constrains |
+| **T5 Systematic-bias check on real photos** | Detects correspondence points that are consistently off on real faces (e.g. a lid point that always sits 2 px too high) | Needs **≥ 10 photos** with permission for commercial R&D use. Per-landmark mean residual vector across photos: any landmark with a consistent bias **> 2 % IOD** is flagged and its embedding re-optimized. With one photo this test is not meaningful and is reported as "not run" |
+
+What these tests **cannot** prove: true 3D accuracy of a real person's profile. Only the optional profile photo,
+or a 3D scan, can measure that.
+
+## 5. Texture stage: aligned with the restored `blender-print-texture` skill
+
+Two separate things:
+- **Base appearance (v1a, Stage 1 output, not the skill):** the photo is projected onto the fitted mesh through
+  the fitted camera, with a depth test and viewing-angle weights. Lighting is removed using the fitted SH
+  lighting. The parts the photo cannot see (back of head, under the chin, behind the ears) get a smooth,
+  uniform skin or hair colour taken from nearby visible areas. They are **labelled as inferred** and have no
+  invented markings. The result is the figure's starting colour texture.
+- **Enhancement (v1b) = the skill, run as written** on a **copy** of the v1a figure:
+  - §1 inspect; §2 protected backup + working copy; §3 original UV layers kept, a separate print-atlas UV layer
+    only if needed, with the reason stated.
+  - §4 compare with this figure's reference only; **where the reference does not show an area, keep the
+    existing appearance** (no AI invention of the back or sides).
+  - §5 **flat albedo previews from known orthographic cameras**, with each camera's transform, framing and
+    bounds recorded; these previews are the edit targets.
+  - §6 AI paint guide on those previews (model target and appearance reference clearly separated; surface colour
+    only; features locked; drifting guides rejected; prompts saved).
+  - §7 face, eye and hair colour goals, including **no noisy pore detail**; §8 clothing protection.
+  - §9 project only registered, inspected guides with masks, visibility, angle falloff and bounds.
+  - §10 **one 4096 × 4096 colour image per figure**, baked through an **emission/unlit pass**, colour management
+    handled deliberately, polygon material indices cached and restored, margins checked, no 8K deliverable.
+  - §11 AO only if requested; **no reliance on roughness, normal, bump or displacement maps**.
+  - §12 simple final material; PNG saved and packed into the copied `.blend`.
+  - §13 full verification list; §14 save, open, report.
+- **Gaps that remain:** (1) the §5 "painting-and-baking guidance" document has not been supplied; (2) §6's
+  "imagegen skill / built-in image generation tool" doesn't exist in Claude Code and will be replaced by an
+  approved local model (decided at v1b).
+
+Conflicts from revision 1, now resolved:
+
+| Revision 1 | Conflict | Revision 2 |
+|---|---|---|
+| Step 5 "Neutralize" | §2 preserve expression/gaze | Removed; the expression is kept |
+| Step 10c SDXL invents side/back | §4 don't invent unseen areas | Removed; unseen areas keep the inferred base colour |
+| Step 10b SDXL skin detail | §7 no noisy pore detail | Removed |
+| Step 11 "+ roughness" | §10–§12 single colour image | Single colour image only |
+| Steps 8–10 edit the photo directly | §5 registered orthographic albedo previews | The skill's §5 workflow is used |
+| Step 7 hair curves | printable output | Scalp texture + hair shell mesh |
+| "AI fills the back" in quality notes | §4 | Inferred areas are labelled, not invented |
+
+## 6. Downloads and resources
+
+**P0 (this approval):**
+
+| Item | Size | Licence (verified) |
+|---|---|---|
+| `uv` + Python 3.12 virtual environment | ~45 MB | uv: MIT/Apache-2.0; CPython: PSF |
+| PyTorch 2.15 **CPU-only** build | ~0.2 GB | BSD-3-style (PyPI: Apache-2.0 AND BSD-3-Clause AND others, all permissive) |
+| numpy, scipy, opencv-python, mediapipe | ~0.15 GB | BSD-3 / BSD / Apache-2.0 / Apache-2.0 |
+| Face Landmarker bundle (detector + mesh + blendshapes) | 3.7 MB (already used in v0) | Apache-2.0 (each of the 3 model cards checked) |
+| Multiclass Selfie Segmenter | ~16 MB | Apache-2.0 (model card checked) |
+| `FLAME2023Open.zip` (you sign in and download) | unknown until signed in | CC-BY-4.0-based Open Model License (verified, see §7) |
+| **Total** | **≈ 0.4–0.5 GB + FLAME zip** | |
+
+Why Python 3.12: PyTorch 2.15 requires Python ≥ 3.11 and current NumPy requires ≥ 3.12. Ubuntu 22.04 ships 3.10, so
+`uv` installs 3.12 in the project folder only and leaves the system Python untouched. All wheels are
+`manylinux_2_28`, which needs glibc ≥ 2.28; Ubuntu 22.04 has 2.35.
+
+**GPU and memory:** P0 needs **no CUDA**: fitting on CPU takes roughly 1–5 minutes, with about 2 GB of RAM.
+Blender uses your RTX 3050 for renders. The CUDA PyTorch choice is deferred to v1b; your driver version from
+`scripts/check_env.sh` decides it (CUDA 12.8 wheels need driver ≥ 570, CUDA 13 wheels need driver ≥ 580).
+
+**Not used: PyTorch3D or nvdiffrast.** PyTorch3D isn't needed (BSD, conda-forge builds only). nvdiffrast is
+excluded because its NVIDIA licence is non-commercial.
+
+## 7. Licence register
+
+| Component | Licence | Source checked | Commercial |
 |---|---|---|---|
-| FLAME 2023 **Open** model | CC-BY-4.0 + no pornographic use (MPI) | ✅ with attribution | Older FLAME versions are non-commercial. **To verify:** whether the UV layout, masks and landmark files in the Open download are under the same licence (flame.is.tue.mpg.de is blocked from this session) |
-| Our FLAME layer, loader, fitter, correspondence, texture code | Ours | ✅ | Written from the published FLAME paper's equations; no MPI/MICA/DECA code copied |
-| MediaPipe library | Apache-2.0 | ✅ | |
-| Face Landmarker model | Apache-2.0 (model card) | ✅ | |
-| Multiclass Selfie Segmenter model | Apache-2.0 (model card) | ✅ | |
-| MediaPipe canonical face mesh | Apache-2.0 | ✅ | Used to build the correspondence |
-| PyTorch | BSD-3-Clause | ✅ | CUDA wheels bundle NVIDIA runtime libraries under NVIDIA's redistributable EULA (fine for use) |
-| NumPy, SciPy | BSD | ✅ | |
-| OpenCV (4.5+) | Apache-2.0 | ✅ | |
-| diffusers, transformers, accelerate, safetensors | Apache-2.0 | ✅ | |
-| SDXL inpainting 0.1 (diffusers) | CreativeML Open RAIL++-M | ✅ with use restrictions | Outputs are yours; the licence's use restrictions (no harmful/illegal use, etc.) must be passed on to Studio users |
-| SDXL text encoders / VAE (inside the checkpoint) | Same RAIL++-M | ✅ | |
-| sdxl-vae-fp16-fix | MIT | ✅ | |
-| Real-ESRGAN code + x4plus weights | BSD-3-Clause | ✅ | |
-| spandrel (model loader) | MIT | ✅ | Avoids `basicsr`, which is heavy and breaks with newer torchvision |
-| Blender 4.5 | GPL-3 | ✅ | Files you create with Blender are not covered by the GPL |
-| PyTorch3D | BSD-3-Clause | ✅ | Not used in v1 |
-| **Excluded (non-commercial):** MICA, SMIRK, DECA, EMOCA, earlier FLAME versions, nvdiffrast, InsightFace/ArcFace, BiSeNet / CelebAMask-HQ face parsing, GFPGAN's facexlib parsing, CodeFormer, FLUX.1-dev/Kontext-dev, FFHQ-UV | | ❌ | |
+| FLAME 2023 **Open** model and software | Open Model License: CC Attribution; credit + link to licence + note changes; **no pornographic use; no fake, libelous, misleading or defamatory content** | flame.is.tue.mpg.de/modellicense.html, read 2026-11-19; homepage news: "CC-BY-4.0" | ✅ with attribution |
+| FLAME 2017/2019/2020/2023 (non-Open), FLAME Blender add-on | Academic licence, non-commercial | same page | ❌ not used |
+| FLAME texture space | CC BY-NC-SA 4.0 | texturelicense.html | ❌ not used |
+| Registered D3DFACS data | Non-commercial research | datalicense.html | ❌ not used |
+| FLAME vertex masks, landmark embeddings, other separate downloads | Not covered by the Open Model License unless stated | — | ❌ not used |
+| Contents of `FLAME2023Open.zip` | **Unverified until you sign in** and list it | — | Checked at P0.1 |
+| MediaPipe library 1.2.3 | Apache-2.0 | PyPI metadata | ✅ |
+| Face detector (BlazeFace short range), Face Mesh V2, Blendshape V2 models | Apache-2.0 | Google model cards (storage.googleapis.com/mediapipe-assets) | ✅ |
+| Multiclass Selfie Segmenter | Apache-2.0 | Google model card | ✅ |
+| MediaPipe canonical face mesh (for the correspondence) | Apache-2.0 | mediapipe repository | ✅ |
+| PyTorch 2.15 | Apache-2.0 AND BSD-2/BSD-3 AND MIT AND others (all permissive) | PyPI metadata | ✅ |
+| NumPy | BSD-3-Clause and permissive components | PyPI | ✅ |
+| SciPy | BSD | PyPI | ✅ |
+| opencv-python | Apache-2.0 | PyPI | ✅ |
+| Blender 4.5.14 | GPL-3 (program); your output files are not covered | blender.org | ✅ |
+| Our code (FLAME layer, loader, correspondence, fitter, Blender scripts) | Ours | — | ✅ |
+| v1a/v1b candidates (SDXL inpainting, sdxl-vae-fp16-fix, Real-ESRGAN, spandrel, CC0 MPFB teeth/eye assets) | To be re-verified individually at their approval step | — | — |
 
-Also needed for commercial use: **consent** from the person in the photo (face images are biometric data).
+**Using real people's faces:** the Open Model License forbids "fake, libelous, misleading or defamatory content".
+Use photos only with the person's **consent**, and never present a character as genuine footage of them.
 
-## 7. Main risks
-1. The FLAME 2023 Open package may not include UVs under the open licence. *Fallback:* our own UV unwrap in Blender.
-2. The correspondence quality (step 3) limits fit accuracy. *Mitigation:* inner-face landmarks only, and the contour comes from silhouettes.
-3. SDXL may alter identity or be too slow on 4 GB. *Mitigation:* masks, low strength, staged v1a/v1b.
-4. Hair v1 is basic.
-
-## 8. Approvals requested
-1. Paste the original `blender-print-texture` instructions into the skill file.
-2. Run `scripts/check_env.sh` on Ubuntu and share the output.
-3. Register for and download FLAME 2023 Open (and confirm its licence page covers the UV files).
-4. Approve v1a (≈3.5 GB, or ≈0.6 GB CPU-only), then v1b (+≈7.3 GB SDXL).
+## 8. What I need for P0
+1. Approval of the P0 downloads in §6.
+2. FLAME: sign in, download `FLAME2023Open.zip`, run the command below and send me the output (it lists the
+   file names only; nothing is extracted):
+   ```
+   unzip -l FLAME2023Open.zip
+   ```
+3. Where development happens:
+   - **(a) recommended:** commit the zip to this private repository (CC-BY allows sharing with attribution,
+     which I'll add) so I can build and test the correspondence and fitter here;
+   - **(b)** run each step locally and send me the outputs.
+4. One reference photo (with consent), plus an optional side photo of the same person for the profile check, and
+   optionally ≥ 10 consented photos for T5.
+5. The output of `scripts/check_env.sh`.
