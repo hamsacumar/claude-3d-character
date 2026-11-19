@@ -41,3 +41,14 @@ no glasses or hair covering the face.
 - [docs/TOOL_COMPARISON.md](docs/TOOL_COMPARISON.md): tool research and why v0 uses MediaPipe; the v1 upgrade path (FLAME)
 - [docs/RECONSTRUCTION_APPROACH.md](docs/RECONSTRUCTION_APPROACH.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   [docs/ROADMAP.md](docs/ROADMAP.md): the long-term production design (deferred until the experiment is done)
+
+## Photo → 3D head without FLAME (`head_v1`)
+```bash
+scripts/make_head_v1.sh ~/Pictures/face.jpeg
+```
+Uses the project-local P0 environment (`.venv-p0`) and `models/face_landmarker.task`; downloads nothing.
+Output in `output/head_v1/<photo>/`: `head.blend` (opens in Blender), front / three-quarter / side renders,
+`04_sheet.png` (photo next to the renders), `analysis.json`, `head_report.json` (reconstructed vs inferred parts).
+Options: `--use-cycles` (renders with Cycles instead of EEVEE), `--depth-scale 1.2` (exaggerate or flatten the
+estimated face depth), `--no-open`. Code: `c3d/head_v1/` (analysis, NumPy geometry, Blender builder); tests:
+`python tests/test_head_geometry.py`.
