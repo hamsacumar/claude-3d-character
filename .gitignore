@@ -11,3 +11,4 @@ third_party/flame2023_open/
 # project-local tooling
 .tools/
 .cache/
+.venv-p0/

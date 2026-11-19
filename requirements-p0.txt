@@ -1,0 +1,8 @@
+# P0 (FLAME proof of concept), CPU-only. Versions pinned from PyPI metadata (2026-11-19).
+# torch comes from the PyTorch CPU wheel index (see scripts/setup_p0.sh), NOT from PyPI,
+# because the PyPI Linux wheel pulls in ~3-4 GB of CUDA libraries.
+numpy==2.5.5
+scipy==1.18.1
+mediapipe==1.2.3
+# mediapipe depends on opencv-contrib-python; do not also install opencv-python (both provide cv2).
+opencv-contrib-python==5.1.0.95
