@@ -4,3 +4,10 @@ output/
 __pycache__/
 *.pyc
 *.blend1
+
+# FLAME 2023 Open: never committed until every file is verified in docs/licenses/LICENCE_MANIFEST.md
+third_party/flame2023_open/
+*.zip
+# project-local tooling
+.tools/
+.cache/
